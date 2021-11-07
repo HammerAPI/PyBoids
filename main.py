@@ -1,7 +1,6 @@
 import pygame
 from pygame.locals import *
-from random import randint, random, randrange, uniform
-from time import sleep
+from random import random, randrange, uniform
 import math
 import sys
 
@@ -10,26 +9,26 @@ WINDOW_SIZE = WINDOW_W, WINDOW_H = 1600, 900
 BOID_ICON = pygame.transform.smoothscale(pygame.image.load("boid.png"), BOID_SIZE)
 MIN_DEGREES, MAX_DEGREES = 0, 360
 BOID_ICONS = {angle % MAX_DEGREES: pygame.transform.rotate(BOID_ICON, -angle) for angle in range(MAX_DEGREES)}
-PI_180 = math.pi / 180
 DEFAULT_NUM = 25
 
 # Boid related constants
 MAX_SPEED = 3
 MIN_SPEED = 1
-WALL_AVOID = 0.5
 FOV = 75
-COHESION_FACTOR = 0.00025
-SEPARATION_FACTOR = 0.005
-ALIGNMENT_FACTOR = 0.05
+COHESION_STRENGTH = 0.00025
+SEPARATION_STRENGTH = 0.005
+ALIGNMENT_STRENGTH = 0.05
+FOCUS_STRENGTH = 0.0005
+JITTER_STRENGTH = 0.5
 
 class App:
-    def __init__(self, num=None):
+    def __init__(self, args):
         self.running = True
         self.sceen = None
         self.size = self.weight, self.height = WINDOW_SIZE
         self.screen = pygame.display.set_mode(self.size)
-        self.color = "white"
-        self.num = num
+        self.color = "lightblue"
+        self.num = int(args[1]) if len(args) > 1 else DEFAULT_NUM
 
 
     def on_init(self):
@@ -48,7 +47,7 @@ class App:
         elif event.type == pygame.MOUSEBUTTONDOWN:
             self.flock.spawn(event.pos, WINDOW_SIZE)
         elif event.type == pygame.MOUSEMOTION:
-            self.flock.focal_point = event.pos
+            self.flock.focal_point = Position(event.pos)
         elif event.type == pygame.WINDOWLEAVE:
             self.flock.focal_point = None
         else:
@@ -64,7 +63,6 @@ class App:
 
         for boid in self.flock.boids:
             self.screen.blit(boid.icon, boid.rect)
-            #self.screen.blit(boid.text.image, boid.rect.move(-BOID_W / 2, BOID_H * 1.5))
 
         pygame.display.flip()
         pygame.display.update()
@@ -89,12 +87,18 @@ class App:
 
 class Boid:
     def __init__(self, pos, bounds = None):
+        if type(pos) is tuple:
+            pos = Position(pos)
+        if type(bounds) is tuple:
+            bounds = Position(bounds)
+
         self.angle = randrange(MIN_DEGREES, MAX_DEGREES)
         self.icon = BOID_ICONS[self.angle]
         self.rect = self.icon.get_rect()
-        self.rect.center = self.x , self.y = pos
-        self.vx = random() * MAX_SPEED - MAX_SPEED
-        self.vy = random() * MAX_SPEED - MAX_SPEED
+        self.rect.center = pos.as_tuple()
+
+        self.pos = pos
+        self.vel = Position()
         self.fov = FOV
         self.divergence_chance = 0.01
         self.max_speed = MAX_SPEED
@@ -106,45 +110,42 @@ class Boid:
         self.limit_speed()
         self.avoid_walls()
 
-        self.angle = round(math.degrees(math.atan2(self.vy, self.vx))) % MAX_DEGREES
+        self.angle = round(self.vel.angle(degrees=True)) % MAX_DEGREES
 
-        self.x = (self.x + self.vx) % self.bounds[0]
-        self.y = (self.y + self.vy) % self.bounds[1]
+        self.pos = (self.pos + self.vel) % self.bounds
 
-        # Rotate the boid
+        # Rotate the boid's icon
         old_center = self.rect.center
         self.icon = BOID_ICONS[self.angle]
         self.rect = self.icon.get_rect()
-        self.rect.center = self.x, self.y
+        self.rect.center = self.pos.as_tuple()
+
 
     def limit_speed(self):
-        speed = abs(self.vx) + abs(self.vy)
+        speed = self.vel.magnitude()
 
         if speed > self.max_speed:
-            self.vx = (self.vx / speed) * self.max_speed
-            self.vy = (self.vy / speed) * self.min_speed
+            self.vel = (self.vel / speed) * self.min_speed
 
         if speed < self.min_speed:
-            self.vx = (self.vx / speed) * self.min_speed
-            self.vy = (self.vy / speed) * self.max_speed
+            self.vel = (self.vel / speed) * self.max_speed
 
 
     def avoid_walls(self):
-        turn = WALL_AVOID
+        turn = 0.5
         margin = 100
 
-        if self.x < margin:
-            self.vx += turn
+        if self.pos.x < margin:
+            self.vel.x += turn
 
-        if self.x > self.bounds[0] - margin:
-            self.vx -= turn
+        if self.pos.x > self.bounds.x - margin:
+            self.vel.x -= turn
 
-        if self.y < margin:
-            self.vy += turn
+        if self.pos.y < margin:
+            self.vel.y += turn
 
-        if self.y > self.bounds[1] - margin:
-            self.vy -= turn
-
+        if self.pos.y > self.bounds.y - margin:
+            self.vel.y -= turn
 
 class Flock:
     def __init__(self, size):
@@ -152,14 +153,12 @@ class Flock:
         self.boids = []
         self.size = 0
         self.focal_point = None
-        self.separation_const = SEPARATION_FACTOR
-        self.cohesion_const = COHESION_FACTOR
-        self.alignment_const = ALIGNMENT_FACTOR
 
         for i in range(size):
-            x = randint(BOID_W, WINDOW_W - BOID_W)
-            y = randint(BOID_H, WINDOW_H - BOID_H)
-            self.spawn((x, y), WINDOW_SIZE)
+            x = randrange(BOID_W, WINDOW_W - BOID_W)
+            y = randrange(BOID_H, WINDOW_H - BOID_H)
+            pos = Position(x, y)
+            self.spawn(pos, Position(WINDOW_SIZE))
 
 
     def spawn(self, pos, bounds = None):
@@ -177,105 +176,163 @@ class Flock:
             foc = self.focus(boid)
             jit = self.jitter(boid)
 
-            boid.vx += sep[0] + coh[0] + ali[0] + foc[0] + jit[0]
-            boid.vy += sep[1] + coh[1] + ali[1] + foc[1] + jit[1]
+            boid.vel += (sep * SEPARATION_STRENGTH) + (coh * COHESION_STRENGTH) + (ali * ALIGNMENT_STRENGTH) + (foc * FOCUS_STRENGTH) + (jit * JITTER_STRENGTH)
 
             boid.update()
 
     def focus(self, boid):
+        pos = Position()
         if self.focal_point:
-            focus_const = 0.0025
-            x = self.focal_point[0] - boid.x
-            y = self.focal_point[1] - boid.y
 
-            return (x * focus_const, y * focus_const)
-        else:
-            return 0, 0
+            pos = self.focal_point - boid.pos
+
+        return pos
 
     def jitter(self, boid):
         vx = vy = 0
-        if random() < boid.divergence_chance:
-            vx += uniform(-boid.vy, boid.vy)
-            vy += uniform(-boid.vx, boid.vx)
 
-        return (vx, vy)
+        if random() < boid.divergence_chance:
+            vx += uniform(-boid.vel.y, boid.vel.y)
+            vy += uniform(-boid.vel.x, boid.vel.x)
+
+        return Position(vx, vy)
 
 
     def separation(self, boid):
-        x = y = 0
+        pos = Position()
         neighbors = 0
+
         for other in self.boids:
             if boid is not other:
                 if self.distance(boid, other) < boid.min_dist:
-                    x += boid.x - other.x
-                    y += boid.y - other.y
+                    pos += boid.pos - other.pos
                     neighbors += 1
 
         if neighbors > 0:
-            x = x / neighbors
-            y = y / neighbors
+            pos /= neighbors
 
-        return (x * self.separation_const, y * self.separation_const)
+        return pos
 
     def cohesion(self, boid):
-        x = y = 0
+        pos = Position()
         neighbors = 0
 
         for other in self.boids:
             if boid is not other:
                 if self.distance(boid, other) < boid.fov:
-                    x += other.x
-                    y += other.y
+                    pos += other.pos
                     neighbors += 1
 
         if neighbors > 0:
-            x = x / neighbors
-            y = y / neighbors
+            pos /= neighbors
 
-        x -= boid.x
-        y -= boid.y
+        pos -= boid.pos
 
-        return (x * self.cohesion_const, y * self.cohesion_const)
+        return pos
 
     def alignment(self, boid):
-        vx = vy = 0
+        vel = Position()
         neighbors = 0
         for other in self.boids:
             if boid is not other:
                 if self.distance(boid, other) < boid.fov:
-                    vx += other.vx
-                    vy += other.vy
+                    vel += other.vel
                     neighbors += 1
 
         if neighbors > 0:
-            vx = vx / neighbors
-            vy = vy / neighbors
+            vel /= neighbors
 
-        vx -= boid.vx
-        vy -= boid.vy
-
-        return (vx * self.alignment_const, vy * self.alignment_const)
+        vel -= boid.vel
+        return vel
 
     def distance(self, boid1, boid2):
-        return math.sqrt((boid1.x - boid2.x)**2 + (boid1.y - boid2.y)**2)
+        return boid1.pos.dist(boid2.pos)
 
+class Position:
+    def __init__(self, x = 0, y = 0):
+        if type(x) is tuple:
+            y = x[1]
+            x = x[0]
 
-class Text(pygame.sprite.Sprite):
-    def __init__(self, text, width, height):
-        # Call the parent class (Sprite) constructor  
-        pygame.sprite.Sprite.__init__(self)
+        self.x, self.y = x, y
 
-        self.font = pygame.font.SysFont("Arial", 12)
-        self.textSurf = self.font.render(text, 1, "white")
-        self.image = pygame.Surface((width, height))
-        self.image.set_alpha(255)
-        W = self.textSurf.get_width()
-        H = self.textSurf.get_height()
-        self.image.blit(self.textSurf, [width/2 - W/2, height/2 - H/2])
+    def __add__(self, other):
+        if type(other) is Position:
+            return Position(self.x + other.x, self.y + other.y)
+        elif type(other) is tuple:
+            return Position(self.x + other[0], self.y + other[1])
+        elif type(other) is int or type(other) is float:
+            return Position(self.x + other, self.y + other)
+
+    def __sub__(self, other):
+        if type(other) is Position:
+            return Position(self.x - other.x, self.y - other.y)
+        elif type(other) is tuple:
+            return Position(self.x - other[0], self.y - other[1])
+        elif type(other) is int or type(other) is float:
+            return Position(self.x - other, self.y - other)
+
+    def __mul__(self, other):
+        if type(other) is Position:
+            return Position(self.x * other.x, self.y * other.y)
+        elif type(other) is tuple:
+            return Position(self.x * other[0], self.y * other[1])
+        elif type(other) is int or type(other) is float:
+            return Position(self.x * other, self.y * other)
+
+    def __truediv__(self, other):
+        if type(other) is Position:
+            return Position(self.x / other.x, self.y / other.y)
+        elif type(other) is tuple:
+            return Position(self.x / other[0], self.y / other[1])
+        elif type(other) is int or type(other) is float:
+            return Position(self.x / other, self.y / other)
+
+    def __floordiv__(self, other):
+        if type(other) is Position:
+            return Position(self.x // other.x, self.y // other.y)
+        elif type(other) is tuple:
+            return Position(self.x // other[0], self.y // other[1])
+        elif type(other) is int or type(other) is float:
+            return Position(self.x // other, self.y // other)
+
+    def __mod__(self, other):
+        if type(other) is Position:
+            return Position(self.x % other.x, self.y % other.y)
+        elif type(other) is tuple:
+            return Position(self.x % other[0], self.y % other[1])
+        elif type(other) is int or type(other) is float:
+            return Position(self.x % other, self.y % other)
+
+    def __str__(self):
+        return f"({self.x}, {self.y})"
+
+    def dist(self, other):
+        if type(other) is Position:
+            return math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
+        elif type(other) is tuple:
+            return math.sqrt((self.x - other[0])**2 + (self.y - other[1])**2)
+
+    def angle(self, other = None, degrees = False):
+        if other:
+            if type(other) is Position:
+                angle = math.atan2(other.y - self.y, other.x - self.x)
+                return math.degrees(angle) if degrees else angle
+
+            elif type(other) is tuple:
+                angle = math.atan2(other[1] - self.y, other[0] - self.x)
+                return math.degrees(angle) if degrees else angle
+        else:
+            angle = math.atan2(self.y, self.x)
+            return math.degrees(angle) if degrees else angle
+
+    def as_tuple(self):
+        return self.x, self.y
+
+    def magnitude(self):
+        return math.sqrt(self.x**2 + self.y**2)
 
 if __name__ == "__main__" :
-    size = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_NUM
 
-    theApp = App(size)
-
+    theApp = App(sys.argv)
     theApp.on_execute()
