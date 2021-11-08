@@ -30,3 +30,4 @@ Over a year ago I attempted to implement Boids in Rust using the Amethyst game e
 - [Boids](http://www.red3d.com/cwr/boids/)
 - [Boids Pseudocode](http://www.kfish.org/boids/pseudocode.html)
 - [Boids Algorithm Demonstration](https://eater.net/boids)
+- [Pygame Object Oriented Tutorial](http://pygametutorials.wikidot.com/tutorials-basic)
